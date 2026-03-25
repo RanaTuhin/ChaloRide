@@ -1,98 +1,179 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { Card } from '@/components/ui/card';
+import { PrimaryButton } from '@/components/ui/primary-button';
+import { TextField } from '@/components/ui/text-field';
+import { formatINR } from '@/lib/money';
+import {
+  createId,
+  estimateFarePaise,
+  RIDE_TYPES,
+  type RideTypeId,
+  useChaloRideStore,
+} from '@/state/chaloride-store';
+
+function estimateDistanceKm(dropoff: string) {
+  const normalized = dropoff.trim();
+  if (!normalized) return 0;
+  const base = Math.min(18, Math.max(2, normalized.length / 3));
+  return Math.round(base * 10) / 10;
+}
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const { state, dispatch } = useChaloRideStore();
+  const [pickup, setPickup] = useState('Current location');
+  const [dropoff, setDropoff] = useState('');
+  const [note, setNote] = useState('');
+  const [rideTypeId, setRideTypeId] = useState<RideTypeId>('bike');
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  const distanceKm = useMemo(() => estimateDistanceKm(dropoff), [dropoff]);
+  const estimatePaise = useMemo(() => {
+    if (!distanceKm) return 0;
+    return estimateFarePaise(rideTypeId, distanceKm);
+  }, [rideTypeId, distanceKm]);
+
+  const canRequest = pickup.trim().length > 0 && dropoff.trim().length > 0 && distanceKm > 0;
+  const defaultPm = state.paymentMethods.find((p) => p.id === state.defaultPaymentMethodId);
+
+  const onRequestRide = () => {
+    if (!state.user) {
+      router.push('/auth/sign-in');
+      return;
+    }
+    const rideId = createId('ride');
+    dispatch({
+      type: 'ride/create',
+      ride: {
+        id: rideId,
+        requestedAtMs: Date.now(),
+        pickup: { label: pickup.trim() },
+        dropoff: { label: dropoff.trim() },
+        rideTypeId,
+        distanceKm,
+        status: 'requested',
+        estimate: { currency: 'INR', amountPaise: estimatePaise },
+        note: note.trim() ? note.trim() : undefined,
+      },
+    });
+    router.push({ pathname: '/ride/[id]', params: { id: rideId } });
+  };
+
+  return (
+    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <View style={styles.header}>
+        <Text style={styles.brand}>ChaloRide</Text>
+        <Text style={styles.tagline}>{Platform.select({ default: 'Book rides in seconds' })}</Text>
+      </View>
+
+      <Card style={styles.section}>
+        <TextField label="Pickup" value={pickup} onChangeText={setPickup} placeholder="Pickup location" />
+        <TextField
+          label="Drop"
+          value={dropoff}
+          onChangeText={setDropoff}
+          placeholder="Where to?"
+          autoCapitalize="words"
+        />
+        <TextField
+          label="Note (optional)"
+          value={note}
+          onChangeText={setNote}
+          placeholder="Gate / landmark / instructions"
+          autoCapitalize="sentences"
+        />
+      </Card>
+
+      <Card style={styles.section}>
+        <Text style={styles.sectionTitle}>Choose a ride</Text>
+        <View style={styles.rideTypes}>
+          {RIDE_TYPES.map((rt) => {
+            const selected = rt.id === rideTypeId;
+            const est = distanceKm ? estimateFarePaise(rt.id, distanceKm) : undefined;
+            return (
+              <Pressable
+                key={rt.id}
+                accessibilityRole="button"
+                onPress={() => setRideTypeId(rt.id)}
+                style={[styles.rideType, selected ? styles.rideTypeSelected : undefined]}>
+                <Text style={styles.rideTypeTitle}>{rt.title}</Text>
+                <Text style={styles.rideTypeMeta}>
+                  {rt.capacityText} • {rt.etaMinutes} min
+                </Text>
+                <Text style={styles.rideTypePrice}>{est ? formatINR({ currency: 'INR', amountPaise: est }) : '—'}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
+
+      <Card style={styles.section}>
+        <View style={styles.row}>
+          <Text style={styles.kvLabel}>Distance</Text>
+          <Text style={styles.kvValue}>{distanceKm ? `${distanceKm} km` : '—'}</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.kvLabel}>Payment</Text>
+          <Text style={styles.kvValue}>{defaultPm?.label ?? 'Cash'}</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.kvLabel}>Estimated fare</Text>
+          <Text style={styles.kvValue}>
+            {estimatePaise ? formatINR({ currency: 'INR', amountPaise: estimatePaise }) : '—'}
+          </Text>
+        </View>
+      </Card>
+
+      <PrimaryButton
+        title={state.user ? 'Request ChaloRide' : 'Sign in to request'}
+        onPress={onRequestRide}
+        disabled={!canRequest}
+      />
+      <Text style={styles.footnote}>
+        Demo build: location, maps, and payments are mocked. Connect a backend + maps SDK to go production-ready.
+      </Text>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: {
+    padding: 16,
+    gap: 12,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  header: {
+    paddingVertical: 6,
+    gap: 4,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  brand: {
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: 0.2,
   },
+  tagline: {
+    fontSize: 14,
+    opacity: 0.7,
+  },
+  section: { gap: 12 },
+  sectionTitle: { fontSize: 16, fontWeight: '800' },
+  rideTypes: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  rideType: {
+    width: '48%',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.35)',
+    gap: 4,
+  },
+  rideTypeSelected: {
+    borderColor: 'rgba(22,163,74,0.9)',
+  },
+  rideTypeTitle: { fontSize: 16, fontWeight: '800' },
+  rideTypeMeta: { fontSize: 12, opacity: 0.75 },
+  rideTypePrice: { marginTop: 2, fontSize: 14, fontWeight: '800' },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  kvLabel: { fontSize: 13, opacity: 0.7 },
+  kvValue: { fontSize: 14, fontWeight: '700' },
+  footnote: { fontSize: 12, opacity: 0.6, lineHeight: 16, paddingTop: 4 },
 });
